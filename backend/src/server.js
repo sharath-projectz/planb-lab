@@ -40,6 +40,12 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const isProduction = process.env.NODE_ENV === 'production';
 
+// Production frontend origins
+const knownProductionOrigins = [
+  'https://planb-lab1.vercel.app',
+  'https://planb-lab.vercel.app'
+];
+
 // Parse configured frontend origins from FRONTEND_URL (supports comma-separated list of URLs)
 const configuredOrigins = process.env.FRONTEND_URL
   ? process.env.FRONTEND_URL.split(',').map(url => url.trim().replace(/\/+$/, '')).filter(Boolean)
@@ -50,14 +56,20 @@ const devOrigins = [
   'http://localhost:5173',
   'http://127.0.0.1:5173',
   'http://localhost:3000',
-  'http://127.0.0.1:3000'
+  'http://127.0.0.1:3000',
+  'http://localhost:4173',
+  'http://127.0.0.1:4173'
 ];
 
-const allowedOrigins = isProduction
-  ? configuredOrigins
-  : [...new Set([...configuredOrigins, ...devOrigins])];
+const allowedOrigins = [
+  ...new Set([
+    ...knownProductionOrigins,
+    ...configuredOrigins,
+    ...devOrigins
+  ])
+];
 
-app.use(cors({
+const corsOptions = {
   origin: (origin, callback) => {
     // Requests with no origin (e.g. mobile apps, curl, server-to-server health checks) are allowed
     if (!origin) {
@@ -66,23 +78,25 @@ app.use(cors({
 
     const normalizedOrigin = origin.replace(/\/+$/, '');
 
-    if (allowedOrigins.includes(normalizedOrigin)) {
+    if (
+      allowedOrigins.includes(normalizedOrigin) ||
+      /^https:\/\/planb-lab.*\.vercel\.app$/.test(normalizedOrigin)
+    ) {
       return callback(null, true);
     }
 
-    if (isProduction) {
-      return callback(new Error(`CORS policy violation: Origin '${origin}' is not in configured FRONTEND_URL origins.`));
-    }
-
-    // In local development mode, permit localhost origins
-    if (devOrigins.includes(normalizedOrigin)) {
-      return callback(null, true);
-    }
-
-    return callback(new Error(`CORS policy violation: Origin '${origin}' is not allowed.`));
+    // Disallowed origins are rejected cleanly without throwing server errors
+    callback(null, false);
   },
-  credentials: true
-}));
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
+  exposedHeaders: ['Set-Cookie'],
+  maxAge: 86400
+};
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 
 app.use(express.json());
 
