@@ -44,19 +44,34 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess }) {
     }
   };
 
-  const handleDemoLogin = () => {
-    // Instant demo credentials pre-seeded in the backend
+  const handleDemoLogin = async () => {
     setEmail('demo@planblab.io');
     setPassword('demo12345');
-    onAuthSuccess({
-      token: 'demo-jwt-token-verified',
-      user: {
-        id: 'demo-user-001',
-        name: 'Dr. Evelyn Carter (Decision Lead)',
-        email: 'demo@planblab.io'
+    setError('');
+    setLoading(true);
+
+    try {
+      const res = await fetch(`${API_BASE}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: 'demo@planblab.io', password: 'demo12345' })
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.message || data.error || 'Demo login failed');
       }
-    });
-    onClose();
+
+      onAuthSuccess({
+        token: data.token,
+        user: data.user
+      });
+      onClose();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (

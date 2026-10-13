@@ -421,8 +421,8 @@ export const api = {
 
   async listConversations() {
     const token = localStorage.getItem('planb_token');
-    const headers = {};
-    if (token) headers['Authorization'] = `Bearer ${token}`;
+    if (!token) return [];
+    const headers = { 'Authorization': `Bearer ${token}` };
 
     try {
       const res = await fetch(`${API_BASE}/copilot/conversations`, { headers });

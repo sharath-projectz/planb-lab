@@ -5,9 +5,10 @@ dotenv.config();
 
 export function getJwtSecret() {
   const secret = process.env.JWT_SECRET;
-  if (!secret || secret.trim() === '') {
+  const isPlaceholder = secret && (secret.includes('your_jwt_secret') || secret.includes('placeholder'));
+  if (!secret || secret.trim() === '' || isPlaceholder) {
     if (process.env.NODE_ENV === 'production') {
-      throw new Error('[Security Error] JWT_SECRET must be configured in production environment.');
+      throw new Error('[Security Error] JWT_SECRET must be configured in production environment and cannot be a default placeholder.');
     }
     console.warn('[Security Warning] JWT_SECRET not configured. Using temporary dev secret for local development only.');
     return 'planb_lab_dev_only_jwt_secret_not_for_production';

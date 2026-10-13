@@ -34,7 +34,7 @@ const memoryStore = {
       id: 'demo-user-001',
       email: 'demo@planblab.io',
       // hashed bcrypt for 'demo12345'
-      passwordHash: '$2a$10$wK1L8R9b6Rj9zX1J.4N8uOq7sZg1wF9x9y4yK0yE3Q2rF5tG6h8me',
+      passwordHash: '$2a$10$NV6OqYlBKJpL.l/pyzEqfO9dqzcfrpvsWYVcplFu2vdzIDz1Mo10G',
       name: 'Dr. Evelyn Carter (Decision Lead)',
       createdAt: new Date().toISOString()
     }
@@ -153,6 +153,38 @@ const memoryStore = {
   conversations: []
 };
 
+function normalizeWorkflow(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    userId: row.user_id || row.userId || null,
+    isTemplate: row.is_template ?? row.isTemplate ?? false,
+    components: row.components || row.nodes || [],
+    createdAt: row.created_at || row.createdAt,
+    updatedAt: row.updated_at || row.updatedAt
+  };
+}
+
+function normalizeConversation(row) {
+  if (!row) return null;
+  const messages = (row.chat_messages || row.messages || []).map(m => ({
+    id: m.id,
+    conversationId: m.conversation_id || m.conversationId,
+    sender: m.sender,
+    message: m.message,
+    contextData: m.context_data || m.contextData,
+    createdAt: m.created_at || m.createdAt
+  }));
+  return {
+    ...row,
+    userId: row.user_id || row.userId || null,
+    workflowId: row.workflow_id || row.workflowId || 'college_event_reg',
+    messages,
+    createdAt: row.created_at || row.createdAt,
+    updatedAt: row.updated_at || row.updatedAt
+  };
+}
+
 // Database Service Interface
 export const db = {
   isSupabase: isSupabaseConfigured,
@@ -200,7 +232,7 @@ export const db = {
       if (userId) query.or(`user_id.eq.${userId},is_template.eq.true`);
       const { data, error } = await query;
       if (error) throw error;
-      return data;
+      return (data || []).map(normalizeWorkflow);
     }
     return memoryStore.workflows;
   },
@@ -209,22 +241,37 @@ export const db = {
     if (isSupabaseConfigured) {
       const { data, error } = await supabase.from('workflows').select('*').eq('id', id).single();
       if (error) return null;
-      return data;
+      return normalizeWorkflow(data);
     }
     return memoryStore.workflows.find(w => w.id === id) || null;
   },
 
   async createWorkflow(workflowData) {
+    const id = workflowData.id || crypto.randomUUID();
+    const now = new Date().toISOString();
     const newWf = {
-      id: crypto.randomUUID(),
-      ...workflowData,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
+      id,
+      name: workflowData.name,
+      category: workflowData.category || 'General',
+      description: workflowData.description || '',
+      components: workflowData.components || [],
+      userId: workflowData.userId || workflowData.user_id || null,
+      isTemplate: Boolean(workflowData.isTemplate || workflowData.is_template),
+      createdAt: now,
+      updatedAt: now
     };
     if (isSupabaseConfigured) {
-      const { data, error } = await supabase.from('workflows').insert(newWf).select().single();
+      const { data, error } = await supabase.from('workflows').insert({
+        id: newWf.id,
+        user_id: newWf.userId,
+        name: newWf.name,
+        category: newWf.category,
+        description: newWf.description,
+        components: newWf.components,
+        is_template: newWf.isTemplate
+      }).select().single();
       if (error) throw error;
-      return data;
+      return normalizeWorkflow(data) || newWf;
     }
     memoryStore.workflows.push(newWf);
     return newWf;
@@ -232,12 +279,19 @@ export const db = {
 
   async updateWorkflow(id, updateData) {
     if (isSupabaseConfigured) {
-      const { data, error } = await supabase.from('workflows').update({
-        ...updateData,
+      const dbUpdate = {
         updated_at: new Date().toISOString()
-      }).eq('id', id).select().single();
+      };
+      if (updateData.name !== undefined) dbUpdate.name = updateData.name;
+      if (updateData.category !== undefined) dbUpdate.category = updateData.category;
+      if (updateData.description !== undefined) dbUpdate.description = updateData.description;
+      if (updateData.components !== undefined) dbUpdate.components = updateData.components;
+      if (updateData.isTemplate !== undefined || updateData.is_template !== undefined) {
+        dbUpdate.is_template = Boolean(updateData.isTemplate ?? updateData.is_template);
+      }
+      const { data, error } = await supabase.from('workflows').update(dbUpdate).eq('id', id).select().single();
       if (error) throw error;
-      return data;
+      return normalizeWorkflow(data);
     }
     const idx = memoryStore.workflows.findIndex(w => w.id === id);
     if (idx !== -1) {
@@ -259,7 +313,22 @@ export const db = {
       createdAt: new Date().toISOString()
     };
     if (isSupabaseConfigured) {
-      const { data, error } = await supabase.from('simulation_runs').insert(run).select().single();
+      const dbRow = {
+        id: run.id,
+        workflow_id: run.workflowId || run.workflow_id || 'college_event_reg',
+        user_id: run.userId || run.user_id || null,
+        mode: run.mode || 'baseline',
+        tested_conditions: run.testedConditions || run.tested_conditions || [],
+        active_contingencies: run.activeContingencies || run.active_contingencies || [],
+        total_scenarios_tested: run.totalScenariosTested ?? run.total_scenarios_tested ?? 0,
+        successful_scenarios: run.successfulScenarios ?? run.successful_scenarios ?? 0,
+        degraded_scenarios: run.degradedScenarios ?? run.degraded_scenarios ?? 0,
+        blocked_scenarios: run.blockedScenarios ?? run.blocked_scenarios ?? 0,
+        resilience_score: run.handledPercentage ?? run.resilience_score ?? 0,
+        plan_health: run.planHealth || run.plan_health || 'High Risk',
+        scenario_details: run.scenarioDetails || run.scenario_details || {}
+      };
+      const { data, error } = await supabase.from('simulation_runs').insert(dbRow).select().single();
       if (error) console.warn('[Supabase] Failed to log simulation run:', error.message);
       return data || run;
     }
@@ -278,29 +347,20 @@ export const db = {
 
   // Chat Conversations
   async listConversations(userId) {
+    if (!userId) return [];
     if (isSupabaseConfigured) {
       const { data, error } = await supabase.from('chat_conversations').select('*').eq('user_id', userId).order('updated_at', { ascending: false });
       if (error) throw error;
-      return data;
+      return (data || []).map(normalizeConversation);
     }
-    return memoryStore.conversations.filter(c => !userId || c.userId === userId);
+    return memoryStore.conversations.filter(c => c.userId === userId);
   },
 
   async getConversation(id) {
     if (isSupabaseConfigured) {
       const { data, error } = await supabase.from('chat_conversations').select('*, chat_messages(*)').eq('id', id).single();
       if (error) return null;
-      if (data && data.chat_messages && !data.messages) {
-        data.messages = data.chat_messages.map(m => ({
-          id: m.id,
-          conversationId: m.conversation_id,
-          sender: m.sender,
-          message: m.message,
-          contextData: m.context_data,
-          createdAt: m.created_at
-        }));
-      }
-      return data;
+      return normalizeConversation(data);
     }
     return memoryStore.conversations.find(c => c.id === id) || null;
   },
@@ -308,8 +368,8 @@ export const db = {
   async createConversation({ userId, workflowId, title }) {
     const conv = {
       id: crypto.randomUUID(),
-      userId,
-      workflowId,
+      userId: userId || null,
+      workflowId: workflowId || 'college_event_reg',
       title: title || 'New Resiliency Investigation',
       messages: [],
       createdAt: new Date().toISOString(),
@@ -318,12 +378,12 @@ export const db = {
     if (isSupabaseConfigured) {
       const { data, error } = await supabase.from('chat_conversations').insert({
         id: conv.id,
-        user_id: userId,
-        workflow_id: workflowId,
+        user_id: conv.userId,
+        workflow_id: conv.workflowId,
         title: conv.title
       }).select().single();
       if (error) throw error;
-      return data;
+      return normalizeConversation(data) || conv;
     }
     memoryStore.conversations.unshift(conv);
     return conv;
@@ -358,12 +418,13 @@ export const db = {
   },
 
   async deleteConversation(id, userId) {
+    if (!userId) return false;
     if (isSupabaseConfigured) {
       const { error } = await supabase.from('chat_conversations').delete().eq('id', id).eq('user_id', userId);
       if (error) throw error;
       return true;
     }
-    const idx = memoryStore.conversations.findIndex(c => c.id === id && (!userId || c.userId === userId));
+    const idx = memoryStore.conversations.findIndex(c => c.id === id && c.userId === userId);
     if (idx !== -1) {
       memoryStore.conversations.splice(idx, 1);
       return true;

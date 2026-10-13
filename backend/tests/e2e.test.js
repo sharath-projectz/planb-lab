@@ -105,11 +105,46 @@ async function runE2ETests() {
     if (!data.metrics.conditionalAnalysis.formula.includes('P(Internet ∩ OTP)')) throw new Error('Incorrect formula');
   });
 
-  // 8. AI Copilot Chat Endpoint
-  await test('PLANB Copilot Decision Intelligence (/api/copilot/chat)', async () => {
-    const res = await fetch('http://localhost:5000/api/copilot/chat', {
+  // 8. Demo Account Authentication Test
+  let demoToken = '';
+  await test('Demo Account Authentication (/api/auth/login with demo12345)', async () => {
+    const res = await fetch('http://localhost:5000/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: 'demo@planblab.io',
+        password: 'demo12345'
+      })
+    });
+    if (!res.ok) throw new Error(`Demo login failed with HTTP ${res.status}`);
+    const data = await res.json();
+    if (!data.token || data.user.id !== 'demo-user-001') {
+      throw new Error('Demo login did not return valid token for demo-user-001');
+    }
+    demoToken = data.token;
+  });
+
+  // 9. AI Copilot Chat Endpoint (Guest and Authenticated)
+  await test('PLANB Copilot Decision Intelligence (/api/copilot/chat)', async () => {
+    // 9a. Verify guest prompt generates response
+    const guestRes = await fetch('http://localhost:5000/api/copilot/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message: 'What happens if the internet fails?'
+      })
+    });
+    if (!guestRes.ok) throw new Error(`Guest chat failed with HTTP ${guestRes.status}`);
+    const guestData = await guestRes.json();
+    if (!guestData.reply || guestData.reply.length < 20) throw new Error('Guest copilot response too short');
+
+    // 9b. Verify authenticated prompt saves to user conversation
+    const res = await fetch('http://localhost:5000/api/copilot/chat', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${testToken}`
+      },
       body: JSON.stringify({
         message: 'What happens if the internet fails?',
         simulationContext: {
@@ -124,17 +159,26 @@ async function runE2ETests() {
     if (!data.reply || data.reply.length < 20) throw new Error('Copilot response too short or empty');
     if (!data.conversationId) throw new Error('Missing conversationId in chat response');
     
-    // 9. Conversation Persistence and Retrieval Verification
-    await test('Chat History Persistence & Restoration (/api/copilot/conversations)', async () => {
-      const listRes = await fetch('http://localhost:5000/api/copilot/conversations');
+    // 10. Conversation Persistence, Security & Retrieval Verification
+    await test('Chat History Security, Persistence & Retrieval (/api/copilot/conversations)', async () => {
+      // 10a. Unauthenticated access must be rejected
+      const unauthRes = await fetch('http://localhost:5000/api/copilot/conversations');
+      if (unauthRes.status !== 401) throw new Error(`Expected 401 for unauthenticated list, got ${unauthRes.status}`);
+
+      // 10b. Authenticated user can list their own conversations
+      const listRes = await fetch('http://localhost:5000/api/copilot/conversations', {
+        headers: { 'Authorization': `Bearer ${testToken}` }
+      });
       if (!listRes.ok) throw new Error(`HTTP ${listRes.status}`);
       const listData = await listRes.json();
       if (!Array.isArray(listData.conversations)) throw new Error('Expected conversations array');
       const found = listData.conversations.find(c => c.id === data.conversationId);
-      if (!found) throw new Error(`Created conversation ${data.conversationId} not found in history`);
+      if (!found) throw new Error(`Created conversation ${data.conversationId} not found in user history`);
 
-      // Verify single conversation retrieval with messages
-      const getRes = await fetch(`http://localhost:5000/api/copilot/conversations/${data.conversationId}`);
+      // 10c. Verify single conversation retrieval with messages
+      const getRes = await fetch(`http://localhost:5000/api/copilot/conversations/${data.conversationId}`, {
+        headers: { 'Authorization': `Bearer ${testToken}` }
+      });
       if (!getRes.ok) throw new Error(`HTTP ${getRes.status}`);
       const singleData = await getRes.json();
       if (!singleData.conversation || !Array.isArray(singleData.conversation.messages)) {
@@ -143,22 +187,45 @@ async function runE2ETests() {
       if (singleData.conversation.messages.length < 2) {
         throw new Error('Expected both user and assistant messages in conversation');
       }
+
+      // 10d. Another user (e.g. demo user) cannot access this user's conversation ID
+      const crossUserRes = await fetch(`http://localhost:5000/api/copilot/conversations/${data.conversationId}`, {
+        headers: { 'Authorization': `Bearer ${demoToken}` }
+      });
+      if (crossUserRes.status !== 403) throw new Error(`Expected 403 when accessing another user's conversation, got ${crossUserRes.status}`);
     });
 
-    // 10. Conversation Deletion Verification
-    await test('Chat Conversation Deletion (/api/copilot/conversations/:id)', async () => {
-      const delRes = await fetch(`http://localhost:5000/api/copilot/conversations/${data.conversationId}`, {
+    // 11. Conversation Deletion Security Verification
+    await test('Chat Conversation Deletion & Authorization (/api/copilot/conversations/:id)', async () => {
+      // 11a. Unauthenticated delete is rejected
+      const unauthDel = await fetch(`http://localhost:5000/api/copilot/conversations/${data.conversationId}`, {
         method: 'DELETE'
+      });
+      if (unauthDel.status !== 401) throw new Error(`Expected 401 for unauthenticated delete, got ${unauthDel.status}`);
+
+      // 11b. Cross-user delete is rejected
+      const crossDel = await fetch(`http://localhost:5000/api/copilot/conversations/${data.conversationId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${demoToken}` }
+      });
+      if (crossDel.status !== 403) throw new Error(`Expected 403 for cross-user delete, got ${crossDel.status}`);
+
+      // 11c. Owner delete succeeds
+      const delRes = await fetch(`http://localhost:5000/api/copilot/conversations/${data.conversationId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${testToken}` }
       });
       if (!delRes.ok) throw new Error(`HTTP ${delRes.status}`);
 
-      // Verify it is gone
-      const verifyRes = await fetch(`http://localhost:5000/api/copilot/conversations/${data.conversationId}`);
+      // 11d. Verify it is gone
+      const verifyRes = await fetch(`http://localhost:5000/api/copilot/conversations/${data.conversationId}`, {
+        headers: { 'Authorization': `Bearer ${testToken}` }
+      });
       if (verifyRes.status !== 404) throw new Error('Expected 404 after deletion');
     });
   });
 
-  // 11. Security: Production JWT Secret Requirement
+  // 12. Security: Production JWT Secret Requirement
   await test('Security: Production Mode Enforces Configured JWT_SECRET', async () => {
     const originalEnv = process.env.NODE_ENV;
     const originalSecret = process.env.JWT_SECRET;

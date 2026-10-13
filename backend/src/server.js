@@ -30,8 +30,10 @@ dotenv.config();
 
 // Enforce required JWT_SECRET in production mode
 if (process.env.NODE_ENV === 'production') {
-  if (!process.env.JWT_SECRET || process.env.JWT_SECRET.trim() === '') {
-    console.error('[Security Fatal] JWT_SECRET environment variable is required in production mode.');
+  const secret = process.env.JWT_SECRET;
+  const isPlaceholder = secret && (secret.includes('your_jwt_secret') || secret.includes('placeholder'));
+  if (!secret || secret.trim() === '' || isPlaceholder) {
+    console.error('[Security Fatal] JWT_SECRET environment variable is required in production mode and cannot be a default placeholder.');
     process.exit(1);
   }
 }
@@ -342,11 +344,20 @@ app.get('/api/simulations/probabilities', (req, res) => {
 app.post('/api/copilot/chat', optionalAuth, validate(copilotChatSchema), async (req, res) => {
   try {
     const { message, workflowState, simulationContext, conversationId, workflowId } = req.validatedBody;
-    const userId = req.user?.userId || 'demo-user-001';
+    const userId = req.user?.userId || null;
 
     let activeConversation = null;
     if (conversationId) {
       activeConversation = await db.getConversation(conversationId);
+      if (activeConversation) {
+        const convOwner = activeConversation.userId || activeConversation.user_id;
+        if (convOwner && convOwner !== userId) {
+          return res.status(403).json({
+            error: 'Access Denied',
+            message: 'You cannot access or post to another user\'s conversation.'
+          });
+        }
+      }
     }
 
     if (!activeConversation) {
@@ -392,9 +403,9 @@ app.post('/api/copilot/chat', optionalAuth, validate(copilotChatSchema), async (
   }
 });
 
-app.get('/api/copilot/conversations', optionalAuth, async (req, res) => {
+app.get('/api/copilot/conversations', authenticateToken, async (req, res) => {
   try {
-    const userId = req.user?.userId || 'demo-user-001';
+    const userId = req.user.userId;
     const rawConversations = await db.listConversations(userId);
     const conversations = (rawConversations || []).map(c => {
       const msgs = c.messages || c.chat_messages || [];
@@ -416,20 +427,29 @@ app.get('/api/copilot/conversations', optionalAuth, async (req, res) => {
   }
 });
 
-app.get('/api/copilot/conversations/:id', async (req, res) => {
+app.get('/api/copilot/conversations/:id', authenticateToken, async (req, res) => {
   try {
     const conversation = await db.getConversation(req.params.id);
     if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
+    const convOwner = conversation.userId || conversation.user_id;
+    if (convOwner && convOwner !== req.user.userId) {
+      return res.status(403).json({ error: 'Access Denied', message: 'You can only view your own conversations.' });
+    }
     res.json({ conversation });
   } catch (err) {
     res.status(500).json({ error: 'Failed to retrieve conversation' });
   }
 });
 
-app.delete('/api/copilot/conversations/:id', optionalAuth, async (req, res) => {
+app.delete('/api/copilot/conversations/:id', authenticateToken, async (req, res) => {
   try {
-    const userId = req.user?.userId || 'demo-user-001';
-    await db.deleteConversation(req.params.id, userId);
+    const conversation = await db.getConversation(req.params.id);
+    if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
+    const convOwner = conversation.userId || conversation.user_id;
+    if (convOwner && convOwner !== req.user.userId) {
+      return res.status(403).json({ error: 'Access Denied', message: 'You can only delete your own conversations.' });
+    }
+    await db.deleteConversation(req.params.id, req.user.userId);
     res.json({ success: true, message: 'Conversation deleted' });
   } catch (err) {
     res.status(500).json({ error: 'Failed to delete conversation' });
