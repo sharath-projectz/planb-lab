@@ -3,7 +3,16 @@
  * Directly interfaces with Express backend with automatic graceful offline simulation fallback.
  */
 
-const API_BASE = '/api';
+const getApiBase = () => {
+  const raw = import.meta.env.VITE_API_URL;
+  if (!raw || raw.trim() === '') {
+    return '/api';
+  }
+  const clean = raw.trim().replace(/\/+$/, '');
+  return clean.endsWith('/api') ? clean : `${clean}/api`;
+};
+
+export const API_BASE = getApiBase();
 
 export const FAILURE_MODES = [
   { id: 'internet_outage', name: 'Internet Outage', baseProb: 0.20, category: 'Infrastructure', desc: 'Complete loss of WAN connectivity at venue.' },
@@ -372,10 +381,14 @@ export const api = {
   },
 
   async askCopilot({ message, workflowState, simulationContext, conversationId }) {
+    const token = localStorage.getItem('planb_token');
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
     try {
       const res = await fetch(`${API_BASE}/copilot/chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           message,
           workflowState,
@@ -404,5 +417,56 @@ export const api = {
       mode: 'client-offline-heuristic',
       notice: 'Operating in client-side decision mode.'
     };
+  },
+
+  async listConversations() {
+    const token = localStorage.getItem('planb_token');
+    const headers = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    try {
+      const res = await fetch(`${API_BASE}/copilot/conversations`, { headers });
+      if (res.ok) {
+        const data = await res.json();
+        return data.conversations || [];
+      }
+    } catch (err) {
+      console.warn('[API] Could not fetch conversations:', err.message);
+    }
+    return [];
+  },
+
+  async getConversation(id) {
+    const token = localStorage.getItem('planb_token');
+    const headers = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    try {
+      const res = await fetch(`${API_BASE}/copilot/conversations/${id}`, { headers });
+      if (res.ok) {
+        const data = await res.json();
+        return data.conversation || null;
+      }
+    } catch (err) {
+      console.warn('[API] Could not retrieve conversation:', err.message);
+    }
+    return null;
+  },
+
+  async deleteConversation(id) {
+    const token = localStorage.getItem('planb_token');
+    const headers = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    try {
+      const res = await fetch(`${API_BASE}/copilot/conversations/${id}`, {
+        method: 'DELETE',
+        headers
+      });
+      if (res.ok) return true;
+    } catch (err) {
+      console.warn('[API] Could not delete conversation:', err.message);
+    }
+    return false;
   }
 };

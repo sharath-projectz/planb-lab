@@ -18,18 +18,20 @@ export default function CopilotDrawer({
   isOpen, 
   onClose, 
   workflow, 
-  simulationSuite,
-  queryToInject,
-  clearInjectedQuery
+  simulationSuite, 
+  queryToInject, 
+  clearInjectedQuery,
+  activeConversationId,
+  setActiveConversationId
 }) {
-  const [messages, setMessages] = useState([
-    {
-      id: 'welcome-msg',
-      sender: 'assistant',
-      text: `### **Hello! I'm PLANB Copilot**\n\nI audit your decision workflows, uncover cascading failures, and test contingency strategies.\n\nCurrently, you are inspecting the **College Fest Registration** pipeline. Ask me anything about dependencies, conditional failure calculations, or how to eliminate bottlenecks before your event begins!`,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    }
-  ]);
+  const defaultWelcomeMessage = {
+    id: 'welcome-msg',
+    sender: 'assistant',
+    text: `### **Hello! I'm PLANB Copilot**\n\nI audit your decision workflows, uncover cascading failures, and test contingency strategies.\n\nCurrently, you are inspecting the **College Fest Registration** pipeline. Ask me anything about dependencies, conditional failure calculations, or how to eliminate bottlenecks before your event begins!`,
+    timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  };
+
+  const [messages, setMessages] = useState([defaultWelcomeMessage]);
   const [inputMessage, setInputMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [activeEngineMode, setActiveEngineMode] = useState('decision-engine');
@@ -53,6 +55,34 @@ export default function CopilotDrawer({
   useEffect(() => {
     scrollToBottom();
   }, [messages, isLoading]);
+
+  // Load restored conversation if activeConversationId is provided
+  useEffect(() => {
+    if (activeConversationId) {
+      let isSubscribed = true;
+      async function restoreConversation() {
+        setIsLoading(true);
+        try {
+          const conv = await api.getConversation(activeConversationId);
+          if (isSubscribed && conv && conv.messages && conv.messages.length > 0) {
+            const restored = conv.messages.map(m => ({
+              id: m.id,
+              sender: m.sender,
+              text: m.message,
+              timestamp: m.createdAt ? new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Restored'
+            }));
+            setMessages(restored);
+          }
+        } catch (err) {
+          console.warn('Failed to restore conversation:', err);
+        } finally {
+          if (isSubscribed) setIsLoading(false);
+        }
+      }
+      restoreConversation();
+      return () => { isSubscribed = false; };
+    }
+  }, [activeConversationId]);
 
   // Handle injected query from other views (e.g. node inspector or quick action)
   useEffect(() => {
@@ -81,8 +111,13 @@ export default function CopilotDrawer({
       const response = await api.askCopilot({
         message: textToSend,
         workflowState: workflow,
-        simulationContext: simulationSuite
+        simulationContext: simulationSuite,
+        conversationId: activeConversationId
       });
+
+      if (response.conversationId && !activeConversationId && setActiveConversationId) {
+        setActiveConversationId(response.conversationId);
+      }
 
       setActiveEngineMode(response.mode || 'decision-engine');
 
@@ -165,9 +200,12 @@ export default function CopilotDrawer({
 
         <div className="flex items-center gap-2">
           <button 
-            onClick={() => setMessages([messages[0]])}
+            onClick={() => {
+              setMessages([defaultWelcomeMessage]);
+              if (setActiveConversationId) setActiveConversationId(null);
+            }}
             className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-navy-800 transition-colors"
-            title="Clear Chat"
+            title="Clear Chat / New Investigation"
           >
             <Trash2 className="w-4 h-4" />
           </button>

@@ -3,16 +3,26 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const JWT_SECRET = process.env.JWT_SECRET || 'planb_lab_jwt_secret_dev_key_2026';
+export function getJwtSecret() {
+  const secret = process.env.JWT_SECRET;
+  if (!secret || secret.trim() === '') {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('[Security Error] JWT_SECRET must be configured in production environment.');
+    }
+    console.warn('[Security Warning] JWT_SECRET not configured. Using temporary dev secret for local development only.');
+    return 'planb_lab_dev_only_jwt_secret_not_for_production';
+  }
+  return secret;
+}
 
 export function signToken(payload) {
   // 8-hour token lifetime for session continuity
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: '8h' });
+  return jwt.sign(payload, getJwtSecret(), { expiresIn: '8h' });
 }
 
 export function verifyToken(token) {
   try {
-    return jwt.verify(token, JWT_SECRET);
+    return jwt.verify(token, getJwtSecret());
   } catch (err) {
     return null;
   }

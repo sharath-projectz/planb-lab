@@ -150,24 +150,7 @@ const memoryStore = {
       createdAt: new Date().toISOString()
     }
   ],
-  conversations: [
-    {
-      id: 'conv-sample-1',
-      userId: 'demo-user-001',
-      workflowId: 'college_event_reg',
-      title: 'College Fest Registration Vulnerability Audit',
-      messages: [
-        {
-          id: 'msg-1',
-          sender: 'assistant',
-          message: 'Welcome to PLANB LAB Copilot. I have audited the 5-step College Fest Registration pipeline. Under zero active contingencies, 15 out of 15 compound failure scenarios halt at either step 1 (Online Portal) or step 2 (OTP). Would you like to evaluate offline registration caches or fallback staff?',
-          createdAt: new Date(Date.now() - 3600000).toISOString()
-        }
-      ],
-      createdAt: new Date(Date.now() - 3600000).toISOString(),
-      updatedAt: new Date(Date.now() - 3600000).toISOString()
-    }
-  ]
+  conversations: []
 };
 
 // Database Service Interface
@@ -307,6 +290,16 @@ export const db = {
     if (isSupabaseConfigured) {
       const { data, error } = await supabase.from('chat_conversations').select('*, chat_messages(*)').eq('id', id).single();
       if (error) return null;
+      if (data && data.chat_messages && !data.messages) {
+        data.messages = data.chat_messages.map(m => ({
+          id: m.id,
+          conversationId: m.conversation_id,
+          sender: m.sender,
+          message: m.message,
+          contextData: m.context_data,
+          createdAt: m.created_at
+        }));
+      }
       return data;
     }
     return memoryStore.conversations.find(c => c.id === id) || null;

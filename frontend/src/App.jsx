@@ -43,6 +43,7 @@ export default function App() {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [injectedCopilotQuery, setInjectedCopilotQuery] = useState(null);
+  const [activeConversationId, setActiveConversationId] = useState(null);
 
   // Simulation Suite state
   const [simulationSuite, setSimulationSuite] = useState(() => runClientSuite({ enabledContingencies: [], workflow: DEFAULT_WORKFLOW }));
@@ -243,14 +244,20 @@ export default function App() {
               workflow={workflow}
               simulationSuite={simulationSuite}
               onTriggerRetest={handleOpenRetestModal}
+              activeConversationId={activeConversationId}
+              setActiveConversationId={setActiveConversationId}
             />
           )}
 
           {currentView === 'chat_history' && (
             <ChatHistoryView
-              onOpenConversationWithPrompt={(prompt) => {
-                handleOpenCopilotWithQuery(prompt);
-                setCurrentView('copilot');
+              onOpenConversation={(convId) => {
+                setActiveConversationId(convId);
+                setIsCopilotOpen(true);
+              }}
+              onNewConversation={() => {
+                setActiveConversationId(null);
+                setIsCopilotOpen(true);
               }}
             />
           )}
@@ -282,6 +289,8 @@ export default function App() {
         simulationSuite={simulationSuite}
         queryToInject={injectedCopilotQuery}
         clearInjectedQuery={() => setInjectedCopilotQuery(null)}
+        activeConversationId={activeConversationId}
+        setActiveConversationId={setActiveConversationId}
       />
 
       {/* Prominent "APPLY FIX & RETEST" Before vs After Modal */}

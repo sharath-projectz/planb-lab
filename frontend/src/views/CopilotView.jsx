@@ -15,18 +15,48 @@ import { api } from '../services/api';
 export default function CopilotView({
   workflow,
   simulationSuite,
-  onTriggerRetest
+  onTriggerRetest,
+  activeConversationId,
+  setActiveConversationId
 }) {
-  const [messages, setMessages] = useState([
-    {
-      id: 'm1',
-      sender: 'assistant',
-      text: `### **PLANB Copilot Decision Lead Interface**\n\nI am connected to the live deterministic simulation state of **${workflow.name}**.\n\n- Current Tested Coverage: **${simulationSuite.handledPercentage}%** handled (${simulationSuite.scenariosHandledSuccessfully}/${simulationSuite.totalScenariosTested} combinations).\n- Plan Health: **${simulationSuite.planHealth}**.\n\nAsk any question regarding failure cascades, probability calculations, or contingency tradeoffs.`,
-      timestamp: 'Ready'
-    }
-  ]);
+  const defaultWelcomeMessage = {
+    id: 'm1',
+    sender: 'assistant',
+    text: `### **PLANB Copilot Decision Lead Interface**\n\nI am connected to the live deterministic simulation state of **${workflow.name}**.\n\n- Current Tested Coverage: **${simulationSuite.handledPercentage}%** handled (${simulationSuite.scenariosHandledSuccessfully}/${simulationSuite.totalScenariosTested} combinations).\n- Plan Health: **${simulationSuite.planHealth}**.\n\nAsk any question regarding failure cascades, probability calculations, or contingency tradeoffs.`,
+    timestamp: 'Ready'
+  };
+
+  const [messages, setMessages] = useState([defaultWelcomeMessage]);
   const [inputVal, setInputVal] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+
+  // Restore messages when activeConversationId changes
+  useEffect(() => {
+    if (activeConversationId) {
+      let isSubscribed = true;
+      async function restore() {
+        setIsLoading(true);
+        try {
+          const conv = await api.getConversation(activeConversationId);
+          if (isSubscribed && conv && conv.messages && conv.messages.length > 0) {
+            const restored = conv.messages.map(m => ({
+              id: m.id,
+              sender: m.sender,
+              text: m.message,
+              timestamp: m.createdAt ? new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Restored'
+            }));
+            setMessages(restored);
+          }
+        } catch (err) {
+          console.warn('Failed to restore conversation in view:', err);
+        } finally {
+          if (isSubscribed) setIsLoading(false);
+        }
+      }
+      restore();
+      return () => { isSubscribed = false; };
+    }
+  }, [activeConversationId]);
 
   const sampleQuestions = [
     "Why is OTP verification high risk?",
@@ -57,8 +87,13 @@ export default function CopilotView({
       const res = await api.askCopilot({
         message: query,
         workflowState: workflow,
-        simulationContext: simulationSuite
+        simulationContext: simulationSuite,
+        conversationId: activeConversationId
       });
+
+      if (res.conversationId && !activeConversationId && setActiveConversationId) {
+        setActiveConversationId(res.conversationId);
+      }
 
       setMessages(prev => [
         ...prev,
@@ -132,7 +167,10 @@ export default function CopilotView({
         </div>
 
         <button
-          onClick={() => setMessages([messages[0]])}
+          onClick={() => {
+            setMessages([defaultWelcomeMessage]);
+            if (setActiveConversationId) setActiveConversationId(null);
+          }}
           className="p-2 rounded-xl bg-navy-800 hover:bg-navy-700 text-slate-400 hover:text-rose-400 transition-colors"
           title="Clear Conversation"
         >

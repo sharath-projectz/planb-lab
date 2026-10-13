@@ -28,25 +28,58 @@ import { generateCopilotAnswer, isGeminiConfigured } from './services/copilotSer
 
 dotenv.config();
 
+// Enforce required JWT_SECRET in production mode
+if (process.env.NODE_ENV === 'production') {
+  if (!process.env.JWT_SECRET || process.env.JWT_SECRET.trim() === '') {
+    console.error('[Security Fatal] JWT_SECRET environment variable is required in production mode.');
+    process.exit(1);
+  }
+}
+
 const app = express();
 const PORT = process.env.PORT || 5000;
-const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
+const isProduction = process.env.NODE_ENV === 'production';
 
-// CORS configuration (support development and deployed frontend origin)
-const allowedOrigins = [
-  FRONTEND_URL,
+// Parse configured frontend origins from FRONTEND_URL (supports comma-separated list of URLs)
+const configuredOrigins = process.env.FRONTEND_URL
+  ? process.env.FRONTEND_URL.split(',').map(url => url.trim().replace(/\/+$/, '')).filter(Boolean)
+  : [];
+
+// Local development origins
+const devOrigins = [
   'http://localhost:5173',
   'http://127.0.0.1:5173',
-  'https://planb-lab.vercel.app'
+  'http://localhost:3000',
+  'http://127.0.0.1:3000'
 ];
+
+const allowedOrigins = isProduction
+  ? configuredOrigins
+  : [...new Set([...configuredOrigins, ...devOrigins])];
 
 app.use(cors({
   origin: (origin, callback) => {
-    // Allow requests with no origin (like mobile apps, curl, or same-origin)
-    if (!origin || allowedOrigins.includes(origin) || origin.endsWith('.vercel.app')) {
+    // Requests with no origin (e.g. mobile apps, curl, server-to-server health checks) are allowed
+    if (!origin) {
       return callback(null, true);
     }
-    return callback(null, true); // Permissive in preview mode for hackathon judges
+
+    const normalizedOrigin = origin.replace(/\/+$/, '');
+
+    if (allowedOrigins.includes(normalizedOrigin)) {
+      return callback(null, true);
+    }
+
+    if (isProduction) {
+      return callback(new Error(`CORS policy violation: Origin '${origin}' is not in configured FRONTEND_URL origins.`));
+    }
+
+    // In local development mode, permit localhost origins
+    if (devOrigins.includes(normalizedOrigin)) {
+      return callback(null, true);
+    }
+
+    return callback(new Error(`CORS policy violation: Origin '${origin}' is not allowed.`));
   },
   credentials: true
 }));
@@ -362,7 +395,21 @@ app.post('/api/copilot/chat', optionalAuth, validate(copilotChatSchema), async (
 app.get('/api/copilot/conversations', optionalAuth, async (req, res) => {
   try {
     const userId = req.user?.userId || 'demo-user-001';
-    const conversations = await db.listConversations(userId);
+    const rawConversations = await db.listConversations(userId);
+    const conversations = (rawConversations || []).map(c => {
+      const msgs = c.messages || c.chat_messages || [];
+      const lastMsg = msgs.length > 0 ? msgs[msgs.length - 1].message : '';
+      return {
+        id: c.id,
+        title: c.title,
+        workflowId: c.workflowId || c.workflow_id || 'college_event_reg',
+        workflowName: 'College Fest Registration',
+        messageCount: msgs.length,
+        snippet: lastMsg.slice(0, 140) || 'Active decision investigation',
+        createdAt: c.createdAt || c.created_at,
+        updatedAt: c.updatedAt || c.updated_at
+      };
+    });
     res.json({ conversations });
   } catch (err) {
     res.status(500).json({ error: 'Could not fetch conversations' });

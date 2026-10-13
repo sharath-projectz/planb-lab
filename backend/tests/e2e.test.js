@@ -122,6 +122,62 @@ async function runE2ETests() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     if (!data.reply || data.reply.length < 20) throw new Error('Copilot response too short or empty');
+    if (!data.conversationId) throw new Error('Missing conversationId in chat response');
+    
+    // 9. Conversation Persistence and Retrieval Verification
+    await test('Chat History Persistence & Restoration (/api/copilot/conversations)', async () => {
+      const listRes = await fetch('http://localhost:5000/api/copilot/conversations');
+      if (!listRes.ok) throw new Error(`HTTP ${listRes.status}`);
+      const listData = await listRes.json();
+      if (!Array.isArray(listData.conversations)) throw new Error('Expected conversations array');
+      const found = listData.conversations.find(c => c.id === data.conversationId);
+      if (!found) throw new Error(`Created conversation ${data.conversationId} not found in history`);
+
+      // Verify single conversation retrieval with messages
+      const getRes = await fetch(`http://localhost:5000/api/copilot/conversations/${data.conversationId}`);
+      if (!getRes.ok) throw new Error(`HTTP ${getRes.status}`);
+      const singleData = await getRes.json();
+      if (!singleData.conversation || !Array.isArray(singleData.conversation.messages)) {
+        throw new Error('Retrieved conversation missing messages array');
+      }
+      if (singleData.conversation.messages.length < 2) {
+        throw new Error('Expected both user and assistant messages in conversation');
+      }
+    });
+
+    // 10. Conversation Deletion Verification
+    await test('Chat Conversation Deletion (/api/copilot/conversations/:id)', async () => {
+      const delRes = await fetch(`http://localhost:5000/api/copilot/conversations/${data.conversationId}`, {
+        method: 'DELETE'
+      });
+      if (!delRes.ok) throw new Error(`HTTP ${delRes.status}`);
+
+      // Verify it is gone
+      const verifyRes = await fetch(`http://localhost:5000/api/copilot/conversations/${data.conversationId}`);
+      if (verifyRes.status !== 404) throw new Error('Expected 404 after deletion');
+    });
+  });
+
+  // 11. Security: Production JWT Secret Requirement
+  await test('Security: Production Mode Enforces Configured JWT_SECRET', async () => {
+    const originalEnv = process.env.NODE_ENV;
+    const originalSecret = process.env.JWT_SECRET;
+    try {
+      process.env.NODE_ENV = 'production';
+      delete process.env.JWT_SECRET;
+      const { getJwtSecret } = await import('../src/middleware/auth.js');
+      try {
+        getJwtSecret();
+        throw new Error('Should have thrown in production without JWT_SECRET');
+      } catch (err) {
+        if (!err.message.includes('JWT_SECRET must be configured in production')) {
+          throw err;
+        }
+      }
+    } finally {
+      process.env.NODE_ENV = originalEnv;
+      if (originalSecret) process.env.JWT_SECRET = originalSecret;
+    }
   });
 
   console.log(`\n=================================================`);
